@@ -1,0 +1,58 @@
+{
+  "$comment": "A hand-written scene description fixture. Deliberately exercises the value shapes a real loader has to handle: a nested object, an array of objects, a nullable field, a boolean, an integer and a float.",
+  "version": 1,
+  "generator": "@dxyl/graphics",
+  "name": "fixture-scene",
+  "background": "#11151d",
+  "camera": {
+    "position": [0, 1.4, 5.2],
+    "target": [0, 0, 0],
+    "fov": 50,
+    "near": 0.1,
+    "far": 200
+  },
+  "lights": [
+    {
+      "type": "ambient",
+      "color": "#3a4a5e",
+      "intensity": 0.35
+    },
+    {
+      "type": "directional",
+      "color": "#ffffff",
+      "intensity": 2.5,
+      "direction": [0.45, 0.8, 0.55],
+      "shadow": null
+    }
+  ],
+  "objects": [
+    {
+      "id": "cube-1",
+      "kind": "mesh",
+      "geometry": "cube",
+      "position": [0, 0, 0],
+      "rotation": [0, 0.6, 0],
+      "scale": [1, 1, 1],
+      "transparent": false,
+      "material": {
+        "color": "#2f6fdf",
+        "roughness": 0.4,
+        "metalness": 0.05
+      }
+    },
+    {
+      "id": "plate-1",
+      "kind": "mesh",
+      "geometry": "square",
+      "position": [0, -1.1, 0],
+      "rotation": [-1.5707963, 0, 0],
+      "scale": [6, 6, 1],
+      "transparent": false,
+      "material": {
+        "color": "#1b2431",
+        "roughness": 0.9,
+        "metalness": 0
+      }
+    }
+  ]
+}

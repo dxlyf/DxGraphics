@@ -1,0 +1,108 @@
+# Continuous integration.
+#
+# Runs on every push and pull request: install, typecheck, lint, test, build, and keep the
+# build output as an artifact.
+#
+# ## Why the Node matrix has two entries
+#
+# `20` is the oldest supported runtime (`engines.node` in package.json) and `22` is current.
+# A feature that works on one and not the other is exactly the class of bug this catches —
+# `Array.prototype.toSorted`, `Object.groupBy`, and the `zlib.crc32` used by the visual test
+# runner are all version-sensitive.
+#
+# ## Why lint is allowed to fail
+#
+# The build is guaranteed; the lint *policy* is still settling while `src/` is written in
+# parallel, so a style rule that changes would block an otherwise-correct push. The step is
+# kept non-blocking with `continue-on-error: true` and is still reported, so drift stays
+# visible. **Remove `continue-on-error` from the lint step once `src/` is frozen.**
+
+name: CI
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+  # Lets the workflow be re-run by hand from the Actions tab.
+  workflow_dispatch:
+
+# A newer push to the same branch cancels the older run.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  # Keeps pnpm colours and progress output out of the logs.
+  NO_COLOR: '1'
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Typecheck, lint, test, build — the required gate.
+  # ---------------------------------------------------------------------------
+  verify:
+    name: verify (node ${{ matrix.node }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      # Report both Node versions even if one fails, so a single log shows every failure.
+      fail-fast: false
+      matrix:
+        node: ['20', '22']
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        # The version comes from `packageManager` in package.json, so there is one source
+        # of truth rather than a second pin here.
+        with:
+          run_install: false
+
+      - name: Set up Node ${{ matrix.node }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          # Caches the pnpm store, keyed on the lockfile.
+          cache: pnpm
+
+      - name: Install dependencies
+        # `--frozen-lockfile` fails rather than silently resolving a different tree, which is
+        # what makes the CI result a statement about the committed lockfile.
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Lint
+        # Non-blocking on purpose: the lint policy is still settling while src/ is written in
+        # parallel. See the header note. Delete this `continue-on-error` once src/ is frozen.
+        run: pnpm run lint
+        continue-on-error: true
+
+      - name: Test
+        run: pnpm run test
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Verify the build output
+        # Belt and braces: `pnpm build` already runs `build:verify`, so a green build implies
+        # this. Running it explicitly means the check is visible in the log as its own step.
+        run: node scripts/verify-build.mjs
+
+      - name: Upload the dist artifact
+        # Only from one matrix leg: the output is identical, and uploading it twice would
+        # create two artifacts with the same contents.
+        if: matrix.node == '22'
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist
+          path: dist/
+          # A missing dist/ is a failure, not an empty artifact.
+          if-no-files-found: error
+          retention-days: 14

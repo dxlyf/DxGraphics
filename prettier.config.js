@@ -1,0 +1,22 @@
+/** @type {import('prettier').Config} */
+export default {
+  printWidth: 100,
+  tabWidth: 2,
+  useTabs: false,
+  semi: true,
+  singleQuote: true,
+  trailingComma: 'all',
+  bracketSpacing: true,
+  arrowParens: 'always',
+  endOfLine: 'lf',
+  overrides: [
+    {
+      files: ['*.md'],
+      options: { proseWrap: 'preserve' },
+    },
+    {
+      files: ['*.json', '*.jsonc'],
+      options: { trailingComma: 'none' },
+    },
+  ],
+};

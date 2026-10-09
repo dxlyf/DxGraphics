@@ -1,0 +1,23 @@
+# A single triangle. The smallest valid OBJ, used by the loader fixture tests.
+#
+# Layout: three vertices, one normal, one UV, one face. The face line uses the
+# `v/vt/vn` reference form so a parser has to handle all three reference kinds.
+#
+# Exported from Blender as "Wavefront (.obj)" with "Write Normals" and
+# "Write UVs" enabled, triangulated.
+
+# 3 vertex positions
+v 0.000000 0.000000 0.000000
+v 1.000000 0.000000 0.000000
+v 0.000000 1.000000 0.000000
+
+# 1 vertex normal, pointing at +Z
+vn 0.000000 0.000000 1.000000
+
+# 3 UV coordinates
+vt 0.000000 0.000000
+vt 1.000000 0.000000
+vt 0.000000 1.000000
+
+# 1 triangle: position/uv/normal indices, 1-based
+f 1/1/1 2/2/1 3/3/1

@@ -1,0 +1,109 @@
+# Documentation.
+#
+# Builds the Typedoc API reference and deploys it to GitHub Pages.
+#
+# ## One-time setup
+#
+# In the repository settings → Pages, set **Source** to **GitHub Actions**. The deploy step
+# fails with an explicit message until that is configured; it will not silently publish
+# nothing.
+#
+# ## Why `pnpm docs` needs a typecheck first
+#
+# Typedoc reads the TypeScript program. A syntax error anywhere in `src/` makes it emit a
+# half-empty site and exit 0 in some configurations, so the typecheck runs first and the
+# deploy is skipped unless it passes. A docs site that is missing half the API is worse than
+# a failed build, because nobody notices.
+#
+# ## Why the artifact is uploaded as well as deployed
+#
+# The `github-pages` artifact is what `actions/deploy-pages` consumes. Keeping it as a
+# separate, named artifact also means a failed deploy still leaves the built site
+# downloadable for inspection.
+
+name: Docs
+
+on:
+  push:
+    branches: [main, master]
+    paths:
+      # Rebuild only when something that can change the output moves.
+      - 'src/**'
+      - 'docs/**'
+      - 'typedoc.json'
+      - 'package.json'
+      - '.github/workflows/docs.yml'
+  # Lets the site be rebuilt after a settings change without touching src/.
+  workflow_dispatch:
+
+concurrency:
+  group: docs-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    name: build the API reference
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Typecheck before generating
+        # See the header note: a broken program produces a misleadingly incomplete site.
+        run: pnpm run typecheck
+
+      - name: Build the API reference
+        run: pnpm run docs
+
+      - name: Check that something was generated
+        # `typedoc.json` writes to `docs/api`. An empty directory means Typedoc matched no
+        # entry points, which is a configuration error rather than a successful build.
+        run: |
+          if [ ! -d docs/api ] || [ -z "$(ls -A docs/api)" ]; then
+            echo "::error::pnpm docs produced no output in docs/api. Check 'entryPoints' in typedoc.json."
+            exit 1
+          fi
+          echo "generated $(find docs/api -type f | wc -l) file(s)"
+
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+
+      - name: Upload the Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: docs/api
+          retention-days: 7
+
+  deploy:
+    name: deploy to GitHub Pages
+    needs: build
+    runs-on: ubuntu-latest
+
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+
+    steps:
+      - name: Deploy
+        id: deployment
+        uses: actions/deploy-pages@v4

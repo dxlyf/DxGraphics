@@ -1,0 +1,36 @@
+# Build output
+dist/
+coverage/
+*.tsbuildinfo
+
+# Dependencies
+node_modules/
+.pnpm-store/
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+pnpm-debug.log*
+
+# Editor / OS
+.vscode/*
+!.vscode/extensions.json
+.idea/
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+tests/visual/output/
+tests/visual/diff/
+tests/e2e/.cache/
+playwright-report/
+test-results/
+
+# API extractor temp
+dist/api-temp/
+
+# Env
+.env
+.env.local
+.env.*.local

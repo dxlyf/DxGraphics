@@ -1,0 +1,40 @@
+{
+  "$schema": "https://developer.microsoft.com/json-schemas/api-extractor/v7/api-extractor.schema.json",
+  "projectFolder": ".",
+  "mainEntryPointFilePath": "<projectFolder>/dist/types/index.d.ts",
+  "bundledPackages": [],
+  "compiler": {
+    "tsconfigFilePath": "<projectFolder>/tsconfig.build.json",
+    "skipLibCheck": true
+  },
+  "apiReport": {
+    "enabled": true,
+    "reportFolder": "<projectFolder>/docs/api",
+    "reportTempFolder": "<projectFolder>/dist/api-temp",
+    "reportFileName": "graphics.api.md"
+  },
+  "docModel": {
+    "enabled": true,
+    "apiJsonFilePath": "<projectFolder>/docs/api/graphics.api.json"
+  },
+  "dtsRollup": {
+    "enabled": true,
+    "untrimmedFilePath": "<projectFolder>/dist/types/index.rollup.d.ts"
+  },
+  "tsdocMetadata": {
+    "enabled": false
+  },
+  "messages": {
+    "compilerMessageReporting": {
+      "default": { "logLevel": "warning" }
+    },
+    "extractorMessageReporting": {
+      "default": { "logLevel": "warning" },
+      "ae-missing-release-tag": { "logLevel": "none" },
+      "ae-forgotten-export": { "logLevel": "none" }
+    },
+    "tsdocMessageReporting": {
+      "default": { "logLevel": "none" }
+    }
+  }
+}

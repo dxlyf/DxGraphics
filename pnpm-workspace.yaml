@@ -1,0 +1,5 @@
+# pnpm 11 moved build-script allow-listing out of package.json.
+# esbuild ships a native binary and needs its postinstall check to run;
+# Vite and Vitest both depend on it.
+allowBuilds:
+  esbuild: true

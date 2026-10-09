@@ -1,0 +1,27 @@
+{
+  "$schema": "https://typedoc.org/schema.json",
+  "name": "@dxyl/graphics",
+  "entryPoints": ["src/index.ts"],
+  "entryPointStrategy": "expand",
+  "out": "docs/api",
+  "plugin": [],
+  "readme": "README.md",
+  "includeVersion": true,
+  "excludePrivate": true,
+  "excludeInternal": true,
+  "excludeExternals": true,
+  "exclude": ["**/*.test.ts", "**/*.spec.ts", "src/**/types.ts"],
+  "categorizeByGroup": true,
+  "groupOrder": ["Core", "Math", "Geometry", "Materials", "Textures", "Shaders", "Scene", "Renderer", "Animation", "Controls", "Picking", "Assets", "Text", "Effects", "Utils", "WASM", "*"],
+  "navigation": {
+    "includeCategories": true,
+    "includeGroups": true
+  },
+  "validation": {
+    "notExported": true,
+    "invalidLink": true,
+    "notDocumented": false
+  },
+  "treatWarningsAsErrors": false,
+  "skipErrorChecking": false
+}

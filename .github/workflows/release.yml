@@ -1,0 +1,109 @@
+# Release.
+#
+# Triggered by pushing a tag matching `v*` (for example `v0.2.0`). Builds, verifies, and
+# publishes to npm with provenance.
+#
+# ## Setup required once, in the repository settings
+#
+# Add a repository secret named `NPM_TOKEN` containing an npm **automation** token (not a
+# classic publish token) with publish rights on the `@dxyl/graphics` scope. Until that exists
+# the publish step fails with a clear authentication error rather than silently succeeding.
+#
+# ## Why provenance needs `id-token: write`
+#
+# `--provenance` signs a statement linking the published tarball to this exact workflow run.
+# That requires an OIDC token from GitHub, which `id-token: write` grants. Without it npm
+# rejects the publish rather than publishing unattested.
+#
+# ## Why the tag is checked against package.json
+#
+# Publishing `v1.2.3` while package.json says `0.9.0` produces a tarball whose contents
+# disagree with its tag — a mistake that is painful to undo, because npm does not allow
+# republishing a version. The step below fails before anything is published.
+
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+  # Lets a release be re-run from the Actions tab after fixing a transient failure.
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  release:
+    name: build, verify and publish
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: write # create the GitHub Release
+      id-token: write # OIDC token for npm provenance
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+        with:
+          # The full history, so the generated release notes can compare against the previous tag.
+          fetch-depth: 0
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+          # Points npm at the public registry with the token already configured.
+          registry-url: 'https://registry.npmjs.org'
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check the tag against package.json
+        # Never publish a tarball whose version disagrees with its tag.
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG="$(node -p "require('./package.json').version")"
+          echo "tag=$TAG package.json=$PKG"
+          if [ "$TAG" != "$PKG" ]; then
+            echo "::error::tag v$TAG does not match package.json version $PKG"
+            exit 1
+          fi
+
+      - name: Typecheck
+        run: pnpm run typecheck
+
+      - name: Test
+        run: pnpm run test
+
+      - name: Build
+        run: pnpm run build
+
+      - name: Verify the build output
+        run: node scripts/verify-build.mjs
+
+      - name: Inspect the publish payload
+        # `--dry-run` prints exactly which files would be uploaded. A `files` entry in
+        # package.json that accidentally includes src/ or tests/ shows up here, before anyone
+        # can install it.
+        run: pnpm publish --dry-run --no-git-checks
+
+      - name: Publish to npm with provenance
+        run: pnpm publish --provenance --access public --no-git-checks
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
+
+      - name: Create the GitHub Release
+        # Runs after a successful publish, so a Release never announces something that is not
+        # on npm.
+        uses: softprops/action-gh-release@v2
+        with:
+          generate_release_notes: true
+          draft: false
+          prerelease: ${{ contains(github.ref_name, '-') }}

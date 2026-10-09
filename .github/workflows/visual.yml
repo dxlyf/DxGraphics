@@ -1,0 +1,131 @@
+# Visual regression tests.
+#
+# **Manual only** (`workflow_dispatch`). It is not wired to push or pull_request, and that is
+# deliberate:
+#
+#  - Comparing pixels needs a browser. This repository has no headless GPU, so the comparison
+#    itself can only run where someone has produced snapshots, and a CI job that fabricates
+#    them would test nothing.
+#  - `tests/visual/baselines/` currently holds no `.rgba` files. The runner reports a missing
+#    baseline as a **failure**, so a push-triggered run would be red on every commit for a
+#    reason unrelated to the change under review — which trains people to ignore it.
+#
+# ## What this job actually does
+#
+# It runs `tools/visual-test-runner/runner.ts`, which compares whatever is in
+# `tests/visual/actual/` against `tests/visual/baselines/` and writes diff images. When the
+# repository has no snapshots it exits 1 with an explanation; that message is the useful
+# output, and it is captured in the log.
+#
+# To make this job meaningful, either:
+#   1. commit baselines and snapshots (see `tests/visual/README.md`), or
+#   2. add a step that produces `tests/visual/actual/*.rgba` from a real browser here — for
+#      example `npx playwright test` with a spec that dumps `ctx.getImageData(...)`. Playwright
+#      is intentionally not a dependency of this repository, so that step would install it at
+#      run time in the workflow only.
+#
+# ## Why the diff artifacts are uploaded even on success
+#
+# A passing comparison still writes `tests/visual/diff/report.json` with the per-case diff
+# ratios. Having that next to a green check is what makes a threshold change reviewable.
+
+name: Visual
+
+on:
+  workflow_dispatch:
+    inputs:
+      update:
+        description: 'Promote actuals to baselines (writes to the repository)'
+        type: boolean
+        default: false
+      threshold:
+        description: 'Per-channel tolerance, 0..1'
+        type: string
+        default: '0.1'
+      max_diff:
+        description: 'Allowed fraction of differing pixels, 0..1'
+        type: string
+        default: '0.01'
+
+permissions:
+  contents: read
+
+jobs:
+  compare:
+    name: compare snapshots against baselines
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Check out the repository
+        uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          run_install: false
+
+      - name: Set up Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Count the available snapshots
+        # Reported before the run so the log says up front whether there is anything to
+        # compare, instead of leaving that to be inferred from an exit code.
+        run: |
+          ACTUALS=$(find tests/visual/actual -name '*.rgba' -o -name '*.png' 2>/dev/null | wc -l)
+          BASELINES=$(find tests/visual/baselines -name '*.rgba' 2>/dev/null | wc -l)
+          echo "snapshots in tests/visual/actual:   $ACTUALS"
+          echo "baselines in tests/visual/baselines: $BASELINES"
+          echo "::notice::snapshots=$ACTUALS baselines=$BASELINES"
+
+      - name: Run the visual test runner
+        # `continue-on-error` because a missing baseline is a legitimate outcome of a manual
+        # run, and the artifacts below are the thing being collected. The step's own result is
+        # still recorded, and the summary step fails the job for a real regression.
+        id: visual
+        continue-on-error: true
+        run: |
+          node --experimental-strip-types tools/visual-test-runner/runner.ts \
+            --threshold "${{ inputs.threshold }}" \
+            --max-diff "${{ inputs.max_diff }}" \
+            ${{ inputs.update && '--update' || '' }}
+
+      - name: Summarise the result
+        if: always()
+        run: |
+          if [ -f tests/visual/diff/report.json ]; then
+            node -e "
+              const report = require('./tests/visual/diff/report.json');
+              const s = report.summary;
+              console.log('total', s.total, 'passed', s.passed, 'failed', s.failed,
+                          'missing', s.missing, 'updated', s.updated, 'errored', s.errored);
+              for (const c of report.cases) {
+                if (c.status !== 'pass') console.log(' ', c.status, c.name, c.reason ?? c.error ?? '');
+              }
+            "
+          else
+            echo "no report.json was written"
+          fi
+
+      - name: Fail on a real regression
+        if: steps.visual.outcome == 'failure' && !inputs.update
+        run: |
+          echo "::error::the visual comparison failed. Download the 'visual-diff' artifact and"
+          echo "::error::inspect the diff images before considering --update."
+          exit 1
+
+      - name: Upload the diff artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: visual-diff
+          path: tests/visual/diff/
+          # A missing directory means the runner never got as far as writing anything; that is
+          # worth failing on, because the artifact is the point of the job.
+          if-no-files-found: error
+          retention-days: 14

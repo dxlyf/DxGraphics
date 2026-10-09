@@ -1,0 +1,62 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>@dxyl/graphics playground</title>
+    <link rel="stylesheet" href="./src/style.css" />
+  </head>
+  <body>
+    <h1>@dxyl/graphics playground</h1>
+
+    <p class="lede">
+      A single page for switching backend and demo, editing parameters live, and watching
+      the frame statistics. Every demo renders through the library source directly — no
+      build step, no <code>dist/</code>.
+    </p>
+
+    <div class="layout">
+      <aside class="panel" id="panel">
+        <section class="panel-group">
+          <h2>Backend</h2>
+          <div id="backend"></div>
+          <p class="note" id="backend-note"></p>
+        </section>
+
+        <section class="panel-group">
+          <h2>Demo</h2>
+          <div class="field">
+            <label for="demo-select">Scene</label>
+            <select id="demo-select"></select>
+          </div>
+          <p class="note" id="demo-note"></p>
+        </section>
+
+        <section class="panel-group">
+          <h2>Options</h2>
+          <div id="options" class="options"></div>
+        </section>
+
+        <section class="panel-group">
+          <h2>Actions</h2>
+          <div class="actions">
+            <button type="button" id="reset">Reset options</button>
+            <button type="button" id="pause">Pause</button>
+            <button type="button" id="snapshot">Save PNG</button>
+          </div>
+          <p class="note">Save PNG works on the Canvas2D backend; SVG has no pixel buffer.</p>
+        </section>
+      </aside>
+
+      <main class="viewport">
+        <div class="stage" id="stage">
+          <canvas id="canvas"></canvas>
+          <p class="notice" id="notice" hidden></p>
+        </div>
+        <div class="stats" id="stats">starting…</div>
+      </main>
+    </div>
+
+    <script type="module" src="./src/main.ts"></script>
+  </body>
+</html>
