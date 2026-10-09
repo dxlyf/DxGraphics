@@ -10,7 +10,16 @@ A pooled particle simulation, drawn with Canvas2D.
 - **Structure-of-arrays reading.** Positions (`xyz`), colours (`rgba`), sizes, rotations, UVs and life (`life01`, `remaining`) live in separate typed arrays. `getPositionAttribute()` and friends return `BufferAttribute` views over them, so the same data can be uploaded to a GPU without a copy.
 - **Additive compositing.** `globalCompositeOperation = 'lighter'` makes overlapping particles accumulate into a bright core, which is what makes the fountain read as fire rather than confetti. The smoke preset deliberately uses `'source-over'` so it occludes instead of glows.
 - **A sprite cache, because the obvious approach is too slow.** Building a radial gradient per particle per frame puts essentially all the cost in `createRadialGradient` and re-rasterisation. Instead each preset's glow is rasterised **once** and blitted per particle with `drawImage`; the per-particle colour comes from a tinted copy cached by a quantised colour key. The overlay reports how many distinct tints a frame actually used.
-- **A headless sanity check** at the top of `main.ts`, before any DOM access. It asserts that emission produces particles, that the pool cannot overflow, that everything dies after its lifetime when emission stops, and that spawn/kill accounting balances — so a leaking pool or a broken emitter throws at load rather than drawing a blank canvas.
+- **A headless sanity check**, exported as `verifySimulation()` from `scene.ts` and called at
+  the top of `main.ts` before any DOM access. It asserts that emission produces particles,
+  that the pool cannot overflow, that everything dies after its lifetime once emission stops,
+  and that spawn/kill accounting balances — so a leaking pool or a broken emitter throws at
+  load rather than drawing a blank canvas.
+
+  Note that it stops emission with **`stopEmitting()`**, not `stop()`: `stop()` freezes the
+  simulation, so the live particles would never age out and the check would fail on a healthy
+  pool. That is the whole difference between the two methods, and it is what the check is
+  there to catch.
 
 ## What to look for
 
@@ -62,6 +71,15 @@ requirement. The dev server prints the URL it is listening on.
 | File | Contents |
 | --- | --- |
 | `index.html` | Complete page: canvas, overlay, key hints, styles. |
-| `main.ts` | The four presets, the heatless sanity check, the `Renderable2D` that draws the system, and the input handling. |
+| `scene.ts` | **The DOM-free half** — the four presets, the world↔screen projection, `ParticleRenderer`, and the `verifySimulation()` self-check. Importable from a test. |
+| `main.ts` | Only the page: DOM lookup, input handling, and the frame loop. |
 | `sprites.ts` | The pre-rendered glow and streak sprites, and why they are pre-rendered. |
 | `README.md` | This file. |
+
+`scene.ts` exists as a separate module for a specific reason rather than for tidiness. The
+self-check originally lived in `main.ts`, which touches the DOM at module scope, so
+`tests/unit/examples-particles.test.ts` could not import it and **reimplemented** it instead.
+The two copies then drifted — the test used `stopEmitting()` while the example used `stop()`
+— and the page threw `particles outlived their lifetime` on load while the test suite stayed
+green. Anything the test needs to exercise now lives in `scene.ts`, and the test imports the
+real functions rather than restating them.

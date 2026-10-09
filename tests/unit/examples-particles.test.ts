@@ -1,6 +1,14 @@
 /**
  * Headless test for `examples/particles`.
  *
+ * The important property of this file is that it runs **the example's own code**, not a
+ * transcription of it. The first version of this test reimplemented the example's sanity
+ * check instead of importing it, because the check lived in `main.ts` and `main.ts` touches
+ * the DOM at module scope. The two copies then drifted: the test used `stopEmitting()` while
+ * the example used `stop()`, so the page threw `particles outlived their lifetime` in the
+ * browser while this suite reported green. The example's DOM-free half now lives in
+ * `scene.ts`, and everything below imports from it.
+ *
  * Two different concerns are covered, because they fail in different ways:
  *
  *  1. **The simulation** — emission rate, pool capacity, draining, determinism. A broken
@@ -8,8 +16,7 @@
  *     particles than you expect, or none, with no error anywhere.
  *  2. **The draw path** — that the example's structure-of-arrays reads use the right
  *     strides, that one sprite is blitted per live particle, and that the blend state is
- *     restored. A stride mistake reads plausible-looking numbers, so it looks like a
- *     rendering oddity rather than a bug.
+ *     restored.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -17,6 +24,15 @@ import { Canvas2DRenderer, ParticleEmitter, ParticleSystem, Vec3 } from '../../s
 import type { Canvas2DPainter } from '../../src/renderer/canvas2d/Canvas2DPainter';
 import type { Canvas2DRendererOptions } from '../../src/renderer/canvas2d/Canvas2DRenderer';
 import type { CanvasLike } from '../../src/renderer/utils/createCanvas';
+import {
+  PRESETS,
+  ParticleRenderer,
+  SCALE,
+  createProbeSystem,
+  toScreen,
+  toWorld,
+  verifySimulation,
+} from '../../examples/particles/scene';
 
 /* ------------------------------------------------------------------ doubles */
 
@@ -212,24 +228,42 @@ function installDocumentStub() {
   };
 }
 
+/**
+ * Installs a `window` stand-in carrying `devicePixelRatio`.
+ *
+ * `ParticleRenderer.render` reads it to convert the drawing buffer to logical pixels, so
+ * without a stub it would throw in Node.
+ *
+ * @returns A restore function.
+ */
+function installWindowStub(devicePixelRatio = 1) {
+  const original = (globalThis as { window?: unknown }).window;
+  const existing = (original ?? {}) as Record<string, unknown>;
+  (globalThis as { window?: unknown }).window = { ...existing, devicePixelRatio };
+  return {
+    restore: () => {
+      (globalThis as { window?: unknown }).window = original;
+    },
+  };
+}
+
 /* ------------------------------------------------------------------- tests */
 
 describe('ParticleSystem, as the example configures it', () => {
+  it("passes the example's own self-check", () => {
+    // The single most important assertion in this file: it runs `verifySimulation()`, the
+    // exact function `main.ts` calls at load. A duplicated transcription here is what let
+    // the page throw while this suite stayed green, so there is deliberately no copy of the
+    // check's body anywhere in this test.
+    const summary = verifySimulation();
+    console.log('verifySimulation() ->', summary);
+    expect(summary).toMatch(/spawned/);
+  });
+
   it('emits at the configured rate, cannot overflow, and drains after emission stops', () => {
-    // Mirrors the example's module-scope sanity check.
-    const probe = new ParticleSystem({
-      maxParticles: 64,
-      emissionRate: 120,
-      seed: 5,
-      emitter: {
-        shape: 'sphere',
-        radius: 1,
-        speed: { min: 1, max: 2 },
-        lifetime: { min: 0.5, max: 0.5 },
-        size: { min: 0.1, max: 0.1 },
-        gravity: new Vec3(0, -10, 0),
-      },
-    });
+    // The same probe the self-check uses, stepped here so the intermediate numbers are
+    // visible rather than only the pass/fail.
+    const probe = createProbeSystem();
 
     for (let frame = 0; frame < 30; frame++) probe.update(1 / 60);
     const afterEmission = probe.getAliveCount();
@@ -243,7 +277,7 @@ describe('ParticleSystem, as the example configures it', () => {
     expect(midStats.spawned).toBeGreaterThan(30);
 
     // `stopEmitting()`, not `stop()`: the live particles must keep simulating so they can
-    // finish their lifetimes.
+    // finish their lifetimes. Using `stop()` here is the mistake that made the page throw.
     probe.stopEmitting();
     for (let frame = 0; frame < 120; frame++) probe.update(1 / 60);
     console.log('alive 1.5 s after emissions stopped:', probe.getAliveCount());
@@ -473,104 +507,178 @@ describe('ParticleSystem, as the example configures it', () => {
   });
 });
 
+describe('the example projection', () => {
+  it('round-trips world to screen and back', () => {
+    // `toWorld` is the inverse of `toScreen`, and the pointer handler depends on that. If
+    // the two ever disagree, dragging steers the emitter to the wrong place — which looks
+    // like a jittery control rather than a maths error.
+    const width = 880;
+    const height = 560;
+
+    for (const [wx, wy] of [
+      [0, 0],
+      [1, 1],
+      [-2.5, 3],
+      [4, -1.5],
+    ] as const) {
+      const screen = toScreen(wx, wy, width, height);
+      const back = toWorld(screen.x, screen.y, width, height);
+      expect(back.x).toBeCloseTo(wx, 10);
+      expect(back.y).toBeCloseTo(wy, 10);
+    }
+
+    // The origin sits at the bottom centre, and `+Y` is up.
+    const origin = toScreen(0, 0, width, height);
+    expect(origin.x).toBeCloseTo(width / 2, 10);
+    expect(origin.y).toBeCloseTo(height * 0.78, 10);
+    const above = toScreen(0, 1, width, height);
+    expect(above.y).toBeLessThan(origin.y);
+    expect(origin.y - above.y).toBeCloseTo(SCALE, 10);
+  });
+
+  it('keeps the particles of every preset on screen over a second', () => {
+    // A preset whose speed or gravity is out of scale flings its particles off-canvas, which
+    // reads as "the effect is weak" rather than as a bug. This catches that.
+    const stub = installDocumentStub();
+    const windowStub = installWindowStub();
+    const width = 880;
+    const height = 560;
+    try {
+      for (const preset of PRESETS) {
+        const system = new ParticleSystem(preset.options);
+        const positions = system.getPositionAttribute().array;
+
+        let onScreen = 0;
+        let sampled = 0;
+        for (let frame = 0; frame < 60; frame++) {
+          system.update(1 / 60);
+          if (frame % 10 !== 0) continue;
+          const alive = system.getAliveCount();
+          for (let slot = 0; slot < alive; slot++) {
+            const point = toScreen(positions[slot * 3], positions[slot * 3 + 1], width, height);
+            sampled++;
+            if (point.x >= 0 && point.x <= width && point.y >= 0 && point.y <= height) onScreen++;
+          }
+        }
+
+        const ratio = sampled > 0 ? onScreen / sampled : 0;
+        console.log(`preset ${preset.label}: ${onScreen}/${sampled} samples on screen`);
+        expect(sampled).toBeGreaterThan(0);
+        // Not 100%: the fountain legitimately arcs off the top, and the burst starts at the
+        // origin. But most of the plume should be visible.
+        expect(ratio).toBeGreaterThan(0.2);
+
+        system.dispose();
+      }
+    } finally {
+      windowStub.restore();
+      stub.restore();
+    }
+  });
+});
+
 describe('the example draw path', () => {
   it('blits one sprite per live particle and restores the blend state', () => {
     const canvas = new CanvasDouble(880, 560);
     const renderer = new Canvas2DRenderer(rendererOptions(canvas));
 
-    const system = new ParticleSystem({
-      maxParticles: 48,
-      emissionRate: 300,
-      seed: 17,
-      emitter: {
-        shape: 'cone',
-        direction: new Vec3(0, 1, 0),
-        spread: 0.4,
-        speed: { min: 2, max: 4 },
-        lifetime: { min: 0.8, max: 1.6 },
-        size: { min: 0.1, max: 0.3 },
-        endSize: { min: 0.02, max: 0.05 },
-        gravity: new Vec3(0, -5, 0),
-      },
-    });
-    for (let frame = 0; frame < 30; frame++) system.update(1 / 60);
+    const stub = installDocumentStub();
+    const windowStub = installWindowStub();
+    try {
+      // The example's real renderable, driven against the real renderer. Nothing about the
+      // draw path is transcribed here: if `ParticleRenderer` reads the wrong stride, or
+      // forgets to restore the blend state, this fails.
+      const preset = PRESETS[0];
+      const system = new ParticleSystem(preset.options);
+      for (let frame = 0; frame < 30; frame++) system.update(1 / 60);
 
-    // The example's draw loop, reproducing its strides exactly. This is the part that a
-    // test must pin: `slot * 3` for positions, `slot` for size, `slot * 2` for life.
-    const positions = system.getPositionAttribute().array;
-    const sizes = system.getSizeAttribute().array;
-    const life = system.getAttribute('life')!.array;
-    const SCALE = 46;
-    let blits = 0;
-    const widths: number[] = [];
+      const renderable = new ParticleRenderer(system, preset);
+      renderable.prepare();
 
-    const node = {
-      visible: true,
-      render(painter: unknown): void {
-        // The painter is the renderer's own `Canvas2DPainter`, which already holds the
-        // context — so `drawImage` has to go through *it*, not through the context double
-        // directly. Calling the double directly would bypass the painter and prove nothing.
-        const p = painter as Canvas2DPainter;
+      const alive = system.getAliveCount();
+      expect(alive).toBeGreaterThan(0);
 
-        p.globalCompositeOperation = 'source-over';
-        p.globalAlpha = 1;
-        p.fillStyle = 'rgba(8, 10, 16, 0.28)';
-        p.fillRect(0, 0, 880, 560);
+      renderer.render({ visible: true, children: [renderable] } as never, null);
 
-        const alive = system.getAliveCount();
-        p.globalCompositeOperation = 'lighter';
+      const drawImageCalls = canvas.context.callsOf('drawImage');
+      console.log(
+        'preset:', preset.label,
+        '| live:', alive,
+        '| drawImage calls:', drawImageCalls.length,
+        '| renderer.drawn:', renderable.drawn,
+        '| sprites created:', stub.created.length,
+      );
 
-        for (let slot = 0; slot < alive; slot++) {
-          const edge = Math.max(1, sizes[slot] * SCALE);
-          const alpha = life[slot * 2] ** 2;
-          if (alpha <= 0.004) continue;
-          const x = 880 / 2 + positions[slot * 3] * SCALE;
-          const y = 560 * 0.78 - positions[slot * 3 + 1] * SCALE;
+      // The renderer dispatched into the renderable and it blitted. A double that silently
+      // bailed would leave this at zero, which is a trap this file fell into once.
+      expect(drawImageCalls.length).toBeGreaterThan(0);
+      expect(drawImageCalls.length).toBeLessThanOrEqual(alive);
+      expect(renderable.drawn).toBe(alive);
 
-          p.save();
-          p.globalAlpha = Math.min(1, alpha);
-          p.translate(x, y);
-          p.drawImage({}, { dx: -edge / 2, dy: -edge / 2, dw: edge, dh: edge });
-          p.restore();
+      // Each particle was drawn at its own size. `Canvas2DPainter.drawImage` forwards the
+      // 5-argument canvas overload as *positional* arguments, so the width is `args[3]` —
+      // reading `args[1].dw` silently yields `undefined` for every call, which makes a
+      // "sizes are all identical" assertion pass for the wrong reason.
+      const widths = drawImageCalls.map((call) => call.args[3] as number);
+      console.log('distinct drawn widths:', new Set(widths).size, '| sample:', widths.slice(0, 5).map((w) => w.toFixed(2)).join(', '));
+      expect(widths.every((width) => typeof width === 'number')).toBe(true);
+      expect(new Set(widths).size).toBeGreaterThan(1);
+      for (const width of widths) {
+        expect(Number.isFinite(width)).toBe(true);
+        expect(width).toBeGreaterThan(0);
+      }
+      // The reported range matches what was actually drawn.
+      expect(renderable.minEdge).toBeCloseTo(Math.min(...widths), 6);
+      expect(renderable.maxEdge).toBeCloseTo(Math.max(...widths), 6);
 
-          blits++;
-          widths.push(edge);
-        }
+      // A tinted sprite was cached rather than rasterised per particle.
+      expect(stub.created.length).toBeGreaterThan(0);
+      expect(stub.created.length).toBeLessThan(alive);
+      expect(renderable.tintCount).toBeGreaterThan(0);
+      expect(renderable.tintCount).toBeLessThanOrEqual(stub.created.length);
 
-        p.globalAlpha = 1;
-        p.globalCompositeOperation = 'source-over';
-      },
-    };
+      // Blend state must not leak into the next frame.
+      expect(canvas.context.globalCompositeOperation).toBe('source-over');
+      expect(canvas.context.globalAlpha).toBe(1);
 
-    renderer.render({ visible: true, children: [node] } as never, null);
-
-    const alive = system.getAliveCount();
-    const drawImageCalls = canvas.context.callsOf('drawImage');
-    console.log('live:', alive, '| drawImage calls:', drawImageCalls.length, '| blits:', blits);
-
-    expect(alive).toBeGreaterThan(0);
-    // The renderer really dispatched into the node — a double that silently bailed would
-    // leave this at zero.
-    expect(drawImageCalls.length).toBeGreaterThan(0);
-    expect(drawImageCalls.length).toBe(blits);
-    // Never more blits than live particles.
-    expect(drawImageCalls.length).toBeLessThanOrEqual(alive);
-
-    // Each particle was drawn at its own size: a stride bug collapses these to one value or
-    // to NaN.
-    expect(widths.length).toBeGreaterThan(0);
-    expect(new Set(widths).size).toBeGreaterThan(1);
-    for (const width of widths) {
-      expect(Number.isFinite(width)).toBe(true);
-      expect(width).toBeGreaterThan(0);
+      system.dispose();
+    } finally {
+      windowStub.restore();
+      stub.restore();
     }
 
-    // Blend state must not leak into the next frame.
-    expect(canvas.context.globalCompositeOperation).toBe('source-over');
-    expect(canvas.context.globalAlpha).toBe(1);
-
-    system.dispose();
     renderer.dispose();
+  });
+
+  it('draws every preset without throwing', () => {
+    // A cheap sweep so a preset with a bad option bag fails here rather than only when
+    // someone presses its key.
+    const stub = installDocumentStub();
+    const windowStub = installWindowStub();
+    try {
+      for (const preset of PRESETS) {
+        const canvas = new CanvasDouble(320, 200);
+        const renderer = new Canvas2DRenderer(rendererOptions(canvas, 320, 200));
+        const system = new ParticleSystem(preset.options);
+
+        // Long enough for the burst preset to fire at least once.
+        for (let frame = 0; frame < 90; frame++) system.update(1 / 60);
+
+        const renderable = new ParticleRenderer(system, preset);
+        renderable.prepare();
+        renderer.render({ visible: true, children: [renderable] } as never, null);
+
+        const blits = canvas.context.callsOf('drawImage').length;
+        console.log(`preset ${preset.label}: live ${system.getAliveCount()}, blits ${blits}`);
+        expect(blits).toBeGreaterThan(0);
+
+        system.dispose();
+        renderer.dispose();
+      }
+    } finally {
+      windowStub.restore();
+      stub.restore();
+    }
   });
 
   it('rasterises a bounded number of tinted sprites for a colour ramp', () => {

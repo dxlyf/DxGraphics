@@ -118,6 +118,16 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **The particles example threw `particles outlived their lifetime` on load.** Its own
+  self-check stopped emission with `stop()` — which freezes the whole simulation, so the
+  live particles could never age out — and then asserted that the pool had drained. It now
+  uses `stopEmitting()`, which is exactly the distinction that method exists for.
+  The reason this shipped is worth recording: `main.ts` touches the DOM at module scope, so
+  the test could not import the self-check and **reimplemented** it instead. The copy used
+  `stopEmitting()` while the example used `stop()`, so the page threw while the suite stayed
+  green. The example's DOM-free half — presets, projection, `ParticleRenderer` and
+  `verifySimulation()` — now lives in `examples/particles/scene.ts`, and the test calls
+  `verifySimulation()` directly rather than restating it. Shared code cannot drift.
 - **The particle system never emitted anything.** Four independent defects, each of which
   alone was enough to leave the canvas blank, and none of which raised an error:
   - **`ParticleSystem`'s free list was never initialised**, so `allocateSlot()` always
