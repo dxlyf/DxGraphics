@@ -165,7 +165,7 @@ export class Clock {
    * `[minDelta, maxDelta]`, so a consumer that steps an animation cannot be teleported
    * by a backgrounded tab. {@link elapsed} accumulates **that same reported delta**,
    * not the raw wall-clock gap: otherwise `elapsed` and `getDelta()` would describe two
-   * different timelines, and a caller summing the deleltas it was handed could never
+   * different timelines, and a caller summing the deltas it was handed could never
    * reconcile them with `getElapsedTime()`.
    *
    * @param now Optional timestamp in milliseconds.

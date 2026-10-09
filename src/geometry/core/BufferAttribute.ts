@@ -603,12 +603,25 @@ export class BufferAttribute<T extends TypedArray = TypedArray> extends Disposab
 /* Convenience subclasses                                                     */
 /* -------------------------------------------------------------------------- */
 
-/** Builds the backing store of a convenience subclasses from a length or a sequence. */
+/**
+ * Builds the backing store of a convenience subclass from a length or a sequence.
+ *
+ * A typed array of the **same type** is adopted by reference rather than copied. That is
+ * load-bearing, not an optimisation: producers that keep their own view of the data — a
+ * `ParticleSystem` writing into its simulation arrays while handing out
+ * `Float32BufferAttribute` views of them — depend on writing through one and reading
+ * through the other. Copying quietly severs that link, and the reader sees a buffer of
+ * zeros forever. There is no error, and nothing throws, because both buffers are valid.
+ *
+ * A plain array or a length still allocates, and a typed array of a different type is
+ * still converted, so the declared `T` stays honest.
+ */
 function createArray<T extends TypedArray>(
   Type: TypedArrayConstructor<T>,
   source: ArrayLike<number> | number,
 ): T {
   if (typeof source === 'number') return new Type(source);
+  if (source instanceof Type) return source;
   const array = new Type(source.length);
   for (let i = 0; i < source.length; i++) array[i] = source[i];
   return array;

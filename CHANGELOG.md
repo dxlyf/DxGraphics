@@ -118,6 +118,38 @@ this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.htm
 
 ### Fixed
 
+- **The particle system never emitted anything.** Four independent defects, each of which
+  alone was enough to leave the canvas blank, and none of which raised an error:
+  - **`ParticleSystem`'s free list was never initialised**, so `allocateSlot()` always
+    returned `-1` and `spawn()` produced zero particles for the life of the system. It hid
+    because `reset()` calls `killAll()`, which *did* populate the list — so anything that
+    reset before spawning worked, and only a fresh, auto-started system was silent.
+  - **The free list handed out the highest slots first**, so the live particles sat at
+    `capacity - 1` downward while the documented invariant — "live particles are
+    `0 .. getAliveCount() - 1`" — told every consumer to read from index `0` and find
+    zeros. Allocation now fills from the front, which is what makes the invariant true.
+  - **`Float32BufferAttribute` copied its input instead of adopting it.** The
+    `ParticleSystem` keeps its own simulation arrays and exposes
+    `Float32BufferAttribute` views of them, so it writes through one buffer and consumers
+    read another. All seven attributes — position, velocity, colour, size, rotation, UV
+    and life — read as zeros forever, with both buffers individually valid. A typed array
+    of the matching type is now adopted by reference; plain arrays and mismatched types
+    are still converted.
+  - **`emissionRate` defaulted to `10` and beat the emitter's own `rate`.** An
+    `emitter: { rate: 200 }` was silently overridden by a system-level default the caller
+    never set. `0` now means "unspecified", so the emitter's rate is used unless the system
+    explicitly sets one.
+- **A burst-only emitter could never fire.** `start()` enabled emission only when
+  `emissionRate > 0`, but the burst branch of `update()` is itself guarded by `emitting`,
+  so a system configured with `emissionRate: 0` and a `burst` was permanently silent.
+  Emission is now enabled when there is anything to emit — a rate or a burst.
+- **`ParticleSystem` had no way to stop emitting while letting the live particles
+  finish.** `stop()` freezes the whole simulation, so the existing particles hang in
+  place; there was no "turn the tap off" operation. Added `stopEmitting()` and
+  `resumeEmitting()`, which toggle emission without touching `running` or restarting the
+  emission clock.
+- `ParticleSystem.emissionRate`'s documentation said it defaulted to `10`; it now
+  documents `0` as "use the emitter's rate".
 - **`Clock.getElapsedTime()` and `Clock.getDeltaMilliseconds()` were advancing reads.**
   Both called `getDelta()` first, so merely *reading* a value stepped the clock and
   produced a delta. On a `ManualClock` this was not a subtle bug: with no argument

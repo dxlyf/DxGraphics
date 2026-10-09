@@ -450,10 +450,17 @@ export class ParticleEmitter {
    * @param delta Seconds since the previous step.
    * @param accumulator Carry-over from the previous step; the caller keeps the returned
    *   remainder.
+   * @param rate Particles per second to use. Defaults to this emitter's own {@link rate};
+   *   a `ParticleSystem` passes its `emissionRate` here, because otherwise that setting is
+   *   silently ignored.
    * @returns The whole-particle count and the new accumulator.
    */
-  public computeEmission(delta: number, accumulator: number): { count: number; accumulator: number } {
-    const wanted = accumulator + this.rate * Math.max(0, delta);
+  public computeEmission(
+    delta: number,
+    accumulator: number,
+    rate: number = this.rate,
+  ): { count: number; accumulator: number } {
+    const wanted = accumulator + Math.max(0, rate) * Math.max(0, delta);
     const count = Math.floor(wanted);
     return { count, accumulator: wanted - count };
   }

@@ -225,7 +225,10 @@ export class ParticleSystem extends Disposable<'ParticleSystem'> {
     super();
 
     this.maxParticles = Math.max(1, Math.floor(options.maxParticles ?? 1000));
-    this.emissionRate = Math.max(0, options.emissionRate ?? 10);
+    // `0` means "not specified", so the emitter's own `rate` is used. Defaulting this to
+    // `10` meant an `emitter: { rate: 200 }` was silently overridden by a system-level
+    // default the caller never set — the emitter configuration looked like it was ignored.
+    this.emissionRate = Math.max(0, options.emissionRate ?? 0);
     this.duration = Math.max(0, options.duration ?? 0);
     this.loop = options.loop ?? true;
 
@@ -260,8 +263,31 @@ export class ParticleSystem extends Disposable<'ParticleSystem'> {
     this.lifeArray = new Float32Array(capacity * 2);
 
     this.buildAttributes();
+    this.rebuildFreeList();
 
     if (options.autoStart !== false) this.start();
+  }
+
+  /**
+   * Fills the free list with every slot.
+   *
+   * Two things about the ordering, and both matter:
+   *
+   * 1. **The list must be non-empty to begin with.** Without this call the free list is
+   *    empty, {@link allocateSlot} always returns `-1`, and {@link spawn} silently produces
+   *    zero particles for the entire life of the system — no error, no warning, just
+   *    nothing on screen.
+   * 2. **Slot `0` must come out first.** The list is pushed highest-first so that `pop()`
+   *    yields `0`, `1`, `2`, … Allocation therefore fills the front of the attribute
+   *    buffers, which is what makes "live particles are `0 .. alive - 1`" true. Building
+   *    the list in ascending order instead hands out the *highest* slots, so the live
+   *    particles sit at `capacity - 1` downward while every consumer — the documented
+   *    invariant, the example's draw loop, `copySlot` — reads from index `0` and finds
+   *    zeros.
+   */
+  private rebuildFreeList(): void {
+    this.freeList.length = 0;
+    for (let slot = this.maxParticles - 1; slot >= 0; slot--) this.freeList.push(slot);
   }
 
   /* -------------------------------------------------------------- attributes */
@@ -358,12 +384,18 @@ export class ParticleSystem extends Disposable<'ParticleSystem'> {
   /**
    * Starts (or restarts) the simulation.
    *
+   * Emission is enabled when the system has *anything* to emit: a positive rate, or a
+   * configured burst. Keying this off `emissionRate` alone made a burst-only system
+   * (rate `0`, `burst` set) permanently silent, because the burst branch of `update()` is
+   * itself guarded by `emitting`.
+   *
    * @returns This system, for chaining.
    */
   public start(): this {
     this.assertUsable();
     this.running = true;
-    this.emitting = this.emissionRate > 0;
+    const hasBurst = this.emitter.burst > 0 && this.emitter.burstInterval > 0;
+    this.emitting = this.emissionRate > 0 || this.emitter.rate > 0 || hasBurst;
     this.completed = false;
     this.emissionTime = 0;
     this.elapsed = 0;
@@ -375,12 +407,48 @@ export class ParticleSystem extends Disposable<'ParticleSystem'> {
   /**
    * Stops simulating, keeping the live particles.
    *
+   * Note that this freezes the live particles too. To let them finish their lifetimes
+   * while emission stops, use {@link stopEmitting} instead.
+   *
    * @returns This system, for chaining.
    */
   public stop(): this {
     this.running = false;
     this.emitting = false;
     this.events.emit('stop');
+    return this;
+  }
+
+  /**
+   * Stops creating new particles but keeps simulating the live ones.
+   *
+   * This is the "turn the tap off" operation, and it is deliberately separate from
+   * {@link stop}: `stop()` freezes the whole system, so a caller who wants the existing
+   * particles to finish their lifetimes and fade out has no way to express that with
+   * `stop()` alone. Reach for {@link start} to resume emission — but note that `start()`
+   * restarts the emission clock and is a *restart*, whereas this is a pause.
+   *
+   * @returns This system, for chaining.
+   */
+  public stopEmitting(): this {
+    this.assertUsable();
+    this.emitting = false;
+    return this;
+  }
+
+  /**
+   * Resumes creating particles after {@link stopEmitting}, without restarting the clock.
+   *
+   * Unlike {@link start} this does not reset `emissionTime` or `elapsed`, so the emitter
+   * picks up where it left off rather than replaying its first `duration` seconds.
+   *
+   * @returns This system, for chaining.
+   */
+  public resumeEmitting(): this {
+    this.assertUsable();
+    this.running = true;
+    const hasBurst = this.emitter.burst > 0 && this.emitter.burstInterval > 0;
+    this.emitting = this.emissionRate > 0 || this.emitter.rate > 0 || hasBurst;
     return this;
   }
 
@@ -529,9 +597,7 @@ export class ParticleSystem extends Disposable<'ParticleSystem'> {
   public killAll(): number {
     const killed = this.alive;
     this.alive = 0;
-    this.freeList.length = 0;
-    // Rebuild the free list in reverse so slot 0 is reused first.
-    for (let slot = this.maxParticles - 1; slot >= 0; slot--) this.freeList.push(slot);
+    this.rebuildFreeList();
     this.killedCount += killed;
     this.markAttributesDirty();
     return killed;
@@ -596,10 +662,13 @@ export class ParticleSystem extends Disposable<'ParticleSystem'> {
         }
       }
 
+      // `emissionRate` wins when it is set; otherwise the emitter's own `rate` is used.
+      // Either way the chosen rate has to be *passed* to `computeEmission`, which counts
+      // against whatever rate it is given rather than one it looks up itself.
       const rate = this.emissionRate > 0 ? this.emissionRate : this.emitter.rate;
-      const emission = this.emitter.computeEmission(step, this.emissionAccumulator);
+      const emission = this.emitter.computeEmission(step, this.emissionAccumulator, rate);
       this.emissionAccumulator = emission.accumulator;
-      if (rate > 0 && emission.count > 0) this.spawn(emission.count);
+      if (emission.count > 0) this.spawn(emission.count);
 
       if (this.duration > 0 && this.emissionTime >= this.duration) {
         this.emitting = false;
